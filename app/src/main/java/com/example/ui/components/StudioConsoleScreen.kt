@@ -893,6 +893,20 @@ fun ServerStreamingTab(
     var mountPoint by remember { mutableStateOf(state.streamConfig.mountPoint) }
     var password by remember { mutableStateOf(state.streamConfig.password) }
     var stationName by remember { mutableStateOf(state.streamConfig.stationName) }
+    var protocol by remember { mutableStateOf(state.streamConfig.protocol) }
+    var selectedBitrate by remember { mutableStateOf(state.streamConfig.bitrateKbps) }
+    var justSaved by remember { mutableStateOf(false) }
+
+    fun currentConfig() = StreamConfig(
+        serverUrl = serverUrl,
+        port = port,
+        mountPoint = mountPoint,
+        password = password,
+        stationName = stationName,
+        genre = state.streamConfig.genre,
+        bitrateKbps = selectedBitrate,
+        protocol = protocol
+    )
 
     LazyColumn(
         modifier = Modifier
@@ -918,9 +932,40 @@ fun ServerStreamingTab(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    Text(text = "Protocolo del Servidor", fontSize = 12.sp, color = StudioTextSecondary)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        StreamProtocolType.entries.forEach { option ->
+                            val isSel = protocol == option
+                            Surface(
+                                onClick = { protocol = option; justSaved = false },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) NeonCyan else StudioMutedAccent,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = option.label,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSel) Color.Black else Color.White,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 10.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
                     OutlinedTextField(
                         value = stationName,
-                        onValueChange = { stationName = it },
+                        onValueChange = { stationName = it; justSaved = false },
                         label = { Text("Nombre de la Estación") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = NeonCyan,
@@ -934,8 +979,9 @@ fun ServerStreamingTab(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = serverUrl,
-                            onValueChange = { serverUrl = it },
+                            onValueChange = { serverUrl = it; justSaved = false },
                             label = { Text("Host / IP Servidor") },
+                            placeholder = { Text("tu.servidor.com") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
                                 unfocusedBorderColor = StudioCardBorder
@@ -944,7 +990,7 @@ fun ServerStreamingTab(
                         )
                         OutlinedTextField(
                             value = port,
-                            onValueChange = { port = it },
+                            onValueChange = { port = it; justSaved = false },
                             label = { Text("Puerto") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
@@ -959,7 +1005,7 @@ fun ServerStreamingTab(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = mountPoint,
-                            onValueChange = { mountPoint = it },
+                            onValueChange = { mountPoint = it; justSaved = false },
                             label = { Text("Punto de Montaje (Mount)") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
@@ -969,8 +1015,9 @@ fun ServerStreamingTab(
                         )
                         OutlinedTextField(
                             value = password,
-                            onValueChange = { password = it },
+                            onValueChange = { password = it; justSaved = false },
                             label = { Text("Contraseña Fuente") },
+                            placeholder = { Text("••••••") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
                                 unfocusedBorderColor = StudioCardBorder
@@ -981,38 +1028,61 @@ fun ServerStreamingTab(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(text = "Tasa de Bits (Encoder Bitrate)", fontSize = 12.sp, color = StudioTextSecondary)
+                    Text(text = "Tasa de Bits (kbps)", fontSize = 12.sp, color = StudioTextSecondary)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            .padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         listOf(64, 96, 128, 192, 320).forEach { bitrate ->
-                            val isSel = state.streamConfig.bitrateKbps == bitrate
-                            Button(
-                                onClick = {
-                                    viewModel.updateStreamConfig(
-                                        state.streamConfig.copy(
-                                            serverUrl = serverUrl,
-                                            port = port,
-                                            mountPoint = mountPoint,
-                                            password = password,
-                                            stationName = stationName,
-                                            bitrateKbps = bitrate
-                                        )
-                                    )
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isSel) NeonCyan else StudioMutedAccent,
-                                    contentColor = if (isSel) Color.Black else Color.White
-                                ),
-                                shape = RoundedCornerShape(6.dp),
+                            val isSel = selectedBitrate == bitrate
+                            Surface(
+                                onClick = { selectedBitrate = bitrate; justSaved = false },
+                                shape = RoundedCornerShape(5.dp),
+                                color = if (isSel) NeonCyan else StudioMutedAccent,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text(text = "$bitrate k", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "${bitrate}k",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSel) Color.Black else Color.White,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp)
+                                )
                             }
                         }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Button(
+                        onClick = {
+                            viewModel.saveStreamConfig(currentConfig())
+                            justSaved = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonCyan,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.Save, contentDescription = "Guardar")
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(text = "GUARDAR CONFIGURACIÓN", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    if (justSaved) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Servidor guardado. Se usará esta configuración al transmitir.",
+                            fontSize = 11.sp,
+                            color = NeonCyan
+                        )
                     }
                 }
             }
@@ -1087,7 +1157,7 @@ fun PlaylistTab(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         item {
             Row(
@@ -1178,13 +1248,13 @@ fun PlaylistTab(
                 colors = CardDefaults.cardColors(
                     containerColor = if (item.isPlaying) StudioMutedAccent else StudioCardSurface
                 ),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(6.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         1.dp,
                         if (item.isPlaying) NeonCyan else StudioCardBorder,
-                        RoundedCornerShape(8.dp)
+                        RoundedCornerShape(6.dp)
                     )
                     .clickable {
                         if (item.isPlaying) viewModel.stopPlayback() else viewModel.playPlaylistItem(item.id)
@@ -1193,36 +1263,45 @@ fun PlaylistTab(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Icon(
                             imageVector = if (item.isPlaying) Icons.Default.PlayArrow else Icons.Default.MusicNote,
                             contentDescription = "Track",
                             tint = if (item.isPlaying) NeonCyan else StudioTextSecondary,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(18.dp)
                         )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = item.title,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 color = if (item.isPlaying) NeonCyan else StudioTextPrimary
                             )
                             Text(
                                 text = item.artist,
-                                fontSize = 11.sp,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                 color = StudioTextSecondary
                             )
                         }
                     }
 
+                    Spacer(modifier = Modifier.width(8.dp))
+
                     Text(
                         text = item.duration,
-                        fontSize = 11.sp,
+                        fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
                         color = StudioTextSecondary
                     )
