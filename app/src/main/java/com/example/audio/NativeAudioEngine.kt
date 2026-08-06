@@ -13,6 +13,10 @@ class NativeAudioEngine {
         const val STREAM_STREAMING = 2
         const val STREAM_ERROR = 3
 
+        // Debe coincidir con el enum StreamProtocol de IcecastStreamer.h
+        const val PROTOCOL_ICECAST = 0
+        const val PROTOCOL_SHOUTCAST = 1
+
         init {
             try {
                 System.loadLibrary("radioengine")
@@ -35,7 +39,15 @@ class NativeAudioEngine {
     external fun nativeGetVuMeter(): Float
     external fun nativeIsEngineLive(): Boolean
     external fun nativeGetAudioApiName(): String
-    external fun nativeConnectStream(host: String, port: Int, mount: String, pass: String, bitrate: Int): Boolean
+    external fun nativeConnectStream(
+        host: String,
+        port: Int,
+        mount: String,
+        pass: String,
+        bitrate: Int,
+        protocol: Int,
+        stationName: String
+    ): Boolean
     external fun nativeDisconnectStream()
     external fun nativeGetStreamStatus(): Int
     external fun nativeUpdateMetadata(title: String)
