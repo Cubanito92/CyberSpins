@@ -29,15 +29,20 @@ import java.nio.ByteOrder
 
 private const val TAG = "RadioStudioViewModel"
 
+enum class StreamProtocolType(val label: String, val nativeValue: Int) {
+    ICECAST("Icecast", NativeAudioEngine.PROTOCOL_ICECAST),
+    SHOUTCAST("Shoutcast", NativeAudioEngine.PROTOCOL_SHOUTCAST)
+}
+
 data class StreamConfig(
-    val serverUrl: String = "stream.radiostudio.live",
+    val serverUrl: String = "",
     val port: String = "8000",
     val mountPoint: String = "/stream.wav",
-    val password: String = "studio_pass_2026",
-    val stationName: String = "Radio Studio 104.5 FM Live",
+    val password: String = "",
+    val stationName: String = "Mi Radio Online",
     val genre: String = "Variety / Live Talk / Electronic",
     val bitrateKbps: Int = 128,
-    val protocol: String = "Icecast v2"
+    val protocol: StreamProtocolType = StreamProtocolType.ICECAST
 )
 
 data class SoundPad(
@@ -108,6 +113,12 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
     private var musicDecodeJob: Job? = null
 
     init {
+        // Load the user's previously saved server configuration (if any). The app
+        // never ships with a fixed/hardcoded server — this restores whatever the
+        // user typed and tapped "Guardar" on last time, or sane empty defaults.
+        val savedConfig = StreamConfigStore.load(application)
+        _uiState.update { it.copy(streamConfig = savedConfig) }
+
         // Initialize Native Audio Settings so the engine matches the UI defaults
         // from the very first frame it processes.
         val initial = _uiState.value
@@ -193,8 +204,26 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         val cfg = current.streamConfig
+        if (cfg.serverUrl.isBlank()) {
+            audioEngine.nativeStopEngine()
+            _uiState.update {
+                it.copy(
+                    isConnecting = false,
+                    connectionError = "Configura primero tu servidor en la pestaña \"Servidor\" y pulsa Guardar."
+                )
+            }
+            return
+        }
         val portInt = cfg.port.toIntOrNull() ?: 8000
-        audioEngine.nativeConnectStream(cfg.serverUrl, portInt, cfg.mountPoint, cfg.password, cfg.bitrateKbps)
+        audioEngine.nativeConnectStream(
+            cfg.serverUrl,
+            portInt,
+            cfg.mountPoint,
+            cfg.password,
+            cfg.bitrateKbps,
+            cfg.protocol.nativeValue,
+            cfg.stationName
+        )
 
         connectionWatchJob?.cancel()
         connectionWatchJob = viewModelScope.launch {
@@ -300,8 +329,15 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
+    /** Updates the in-memory config only (used for live UI previews, e.g. picking a bitrate). */
     fun updateStreamConfig(config: StreamConfig) {
         _uiState.update { it.copy(streamConfig = config) }
+    }
+
+    /** Updates the config AND persists it to disk so it survives an app restart. */
+    fun saveStreamConfig(config: StreamConfig) {
+        _uiState.update { it.copy(streamConfig = config) }
+        StreamConfigStore.save(getApplication(), config)
     }
 
     fun toggleLocalRecording() {
