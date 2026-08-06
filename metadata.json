@@ -1,0 +1,6 @@
+{
+  "name": "Radio Streamer Studio",
+  "description": "Estudio profesional de transmisión de radio en vivo para Android con motor C++ (Oboe), mezclador de audio multicanal, ecualizador, efectos de voz y streaming Shoutcast/Icecast.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
