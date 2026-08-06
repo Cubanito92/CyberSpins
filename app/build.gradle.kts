@@ -109,27 +109,24 @@ googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.W
 
 // Generates a local debug.keystore on first build if one isn't already present, so the
 // project compiles and runs out of the box on any machine without manual keystore setup.
-val ensureDebugKeystore by tasks.registering {
+// Uses Gradle's built-in Exec task type (not the `exec {}` script function, which newer
+// Gradle versions no longer resolve inside a plain registered task).
+val ensureDebugKeystore by tasks.registering(Exec::class) {
   val keystoreFile = file("${rootDir}/debug.keystore")
   outputs.file(keystoreFile)
-  doLast {
-    if (!keystoreFile.exists()) {
-      logger.lifecycle("No se encontró debug.keystore, generando uno nuevo en ${keystoreFile.path}")
-      exec {
-        commandLine(
-          "keytool", "-genkeypair", "-v",
-          "-keystore", keystoreFile.absolutePath,
-          "-storepass", "android",
-          "-alias", "androiddebugkey",
-          "-keypass", "android",
-          "-keyalg", "RSA",
-          "-keysize", "2048",
-          "-validity", "10000",
-          "-dname", "CN=Android Debug,O=Android,C=US"
-        )
-      }
-    }
-  }
+  onlyIf { !keystoreFile.exists() }
+  doFirst { logger.lifecycle("No se encontró debug.keystore, generando uno nuevo en ${keystoreFile.path}") }
+  commandLine(
+    "keytool", "-genkeypair", "-v",
+    "-keystore", keystoreFile.absolutePath,
+    "-storepass", "android",
+    "-alias", "androiddebugkey",
+    "-keypass", "android",
+    "-keyalg", "RSA",
+    "-keysize", "2048",
+    "-validity", "10000",
+    "-dname", "CN=Android Debug,O=Android,C=US"
+  )
 }
 
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(ensureDebugKeystore) }
