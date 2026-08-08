@@ -446,6 +446,79 @@ private fun MicMuteButton(isMuted: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
+fun NativeEngineInfoCard(state: StudioUiState) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = StudioCardSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Memory,
+                        contentDescription = "C++ Engine",
+                        tint = NeonCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "MOTOR C++ OBOE NDK",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = StudioTextPrimary
+                    )
+                }
+                Surface(
+                    color = NeonCyan.copy(alpha = 0.15f),
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = "BAJA LATENCIA",
+                        color = NeonCyan,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                InfoTile(label = "Audio API", value = state.audioApiName)
+                InfoTile(label = "Latencia", value = "${state.bufferLatencyMs} ms")
+                InfoTile(label = "Muestreo", value = "${state.sampleRate / 1000} kHz")
+                InfoTile(label = "Canales", value = "${state.activeChannelCount} Estéreo")
+            }
+        }
+    }
+}
+
+@Composable
+fun InfoTile(label: String, value: String) {
+    Column {
+        Text(text = label, fontSize = 10.sp, color = StudioTextSecondary)
+        Text(
+            text = value,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            color = StudioTextPrimary,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+@Composable
 private fun QuickEqStripCard(state: StudioUiState, viewModel: RadioStudioViewModel) {
     Column(
         modifier = Modifier
