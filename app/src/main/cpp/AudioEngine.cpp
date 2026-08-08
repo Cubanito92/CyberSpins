@@ -234,14 +234,22 @@ bool AudioEngine::startRecordingAndPlay() {
         return true;
     }
 
-    // Configure Output Stream
+    // Configure Output Stream.
+    // IMPORTANT: SharingMode::Shared (not Exclusive/MMAP) is required here. Android's
+    // echo canceller (enabled below via InputPreset::VoiceCommunication) taps the signal
+    // through AudioFlinger's mixer; an Exclusive/MMAP output bypasses AudioFlinger
+    // entirely, so the AEC never sees what's coming out of the speaker and can't cancel
+    // it. That mismatch is what causes the squeal/interference on the mic and the music
+    // sounding corrupted while the mic is open.
     oboe::AudioStreamBuilder outBuilder;
     outBuilder.setDirection(oboe::Direction::Output)
               ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-              ->setSharingMode(oboe::SharingMode::Exclusive)
+              ->setSharingMode(oboe::SharingMode::Shared)
               ->setFormat(oboe::AudioFormat::Float)
               ->setChannelCount(oboe::ChannelCount::Stereo)
               ->setSampleRate(mSampleRate)
+              ->setUsage(oboe::Usage::Media)
+              ->setContentType(oboe::ContentType::Music)
               ->setDataCallback(this)
               ->setErrorCallback(this);
 
@@ -265,6 +273,7 @@ bool AudioEngine::startRecordingAndPlay() {
              ->setFormat(oboe::AudioFormat::Float)
              ->setChannelCount(mChannelCount)
              ->setSampleRate(mSampleRate)
+             ->setContentType(oboe::ContentType::Speech)
              ->setInputPreset(oboe::InputPreset::VoiceCommunication);
 
     result = inBuilder.openStream(mInputStream);
@@ -472,7 +481,11 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     std::vector<float> inputBuffer(numSamples, 0.0f);
 
     if (mInputStream && mInputStream->getState() == oboe::StreamState::Started) {
-        mInputStream->read(inputBuffer.data(), numFrames, 0);
+        // 2ms timeout: enough to ride out normal scheduling jitter without ever
+        // stalling the output callback. A 0ns timeout returned immediately on
+        // underrun and silently zero-filled the tail of the buffer, which reads
+        // back as clicking/interference once mixed with the music bed.
+        mInputStream->read(inputBuffer.data(), numFrames, 2'000'000);
     }
 
     processAudioFrame(inputBuffer.data(), output, numFrames);

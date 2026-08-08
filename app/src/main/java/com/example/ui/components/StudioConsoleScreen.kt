@@ -9,6 +9,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -314,265 +316,180 @@ fun MainConsoleTab(
     state: StudioUiState,
     viewModel: RadioStudioViewModel
 ) {
-    LazyColumn(
+    Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Low Latency Native Engine Card
-        item {
-            NativeEngineInfoCard(state = state)
-        }
-
-        // Multi-Channel Fader Console
-        item {
-            FadersConsoleCard(state = state, viewModel = viewModel)
-        }
-
-        // Soundboard Instant Effects Grid
-        item {
-            SoundboardGridCard(state = state, viewModel = viewModel)
-        }
+        MasterVuMeter(peak = state.vuPeakLevel)
+        MixerRackCard(state, viewModel)
+        QuickEqStripCard(state, viewModel)
+        SoundboardGridCard(state = state, viewModel = viewModel)
+        NativeEngineInfoCard(state)
     }
 }
 
 @Composable
-fun NativeEngineInfoCard(state: StudioUiState) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = StudioCardSurface),
-        shape = RoundedCornerShape(12.dp),
+private fun MixerRackCard(state: StudioUiState, viewModel: RadioStudioViewModel) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, StudioCardBorder, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(24.dp))
+            .background(Brush.verticalGradient(listOf(StudioCardSurface, StudioDarkBackground)))
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(24.dp))
+            .padding(20.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Memory,
-                        contentDescription = "C++ Engine",
-                        tint = NeonCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "MOTOR C++ OBOE NDK",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp,
-                        color = StudioTextPrimary
-                    )
-                }
-                Surface(
-                    color = NeonCyan.copy(alpha = 0.15f),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = "BAJA LATENCIA",
-                        color = NeonCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                InfoTile(label = "Audio API", value = state.audioApiName)
-                InfoTile(label = "Latencia", value = "${state.bufferLatencyMs} ms")
-                InfoTile(label = "Muestreo", value = "${state.sampleRate / 1000} kHz")
-                InfoTile(label = "Canales", value = "${state.activeChannelCount} Estéreo")
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("MEZCLADOR", color = StudioTextPrimary, fontWeight = FontWeight.Black, fontSize = 15.sp)
+            DuckingPill(active = state.isDuckingEnabled, onClick = { viewModel.toggleDucking() })
         }
+
+        Spacer(Modifier.height(20.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            ModernKnob(
+                label = "MIC",
+                value = state.micGain / 2f,
+                onValueChange = { viewModel.setMicGain((it * 2f).coerceIn(0f, 2f)) },
+                accentColor = if (state.isMicMuted) StudioTextSecondary else NeonCyan,
+                valueText = if (state.isMicMuted) "MUTE" else "${(state.micGain * 100).toInt()}%"
+            )
+            ModernKnob(
+                label = "MÚSICA",
+                value = state.musicVolume,
+                onValueChange = { viewModel.setMusicVolume(it) },
+                accentColor = NeonPurple,
+                valueText = "${(state.musicVolume * 100).toInt()}%"
+            )
+            ModernKnob(
+                label = "MASTER",
+                value = state.masterVolume,
+                onValueChange = { viewModel.setMasterVolume(it) },
+                accentColor = OnAirRed,
+                valueText = "${(state.masterVolume * 100).toInt()}%"
+            )
+        }
+
+        Spacer(Modifier.height(18.dp))
+
+        MicMuteButton(isMuted = state.isMicMuted, onClick = { viewModel.toggleMicMute() })
     }
 }
 
 @Composable
-fun InfoTile(label: String, value: String) {
-    Column {
-        Text(text = label, fontSize = 10.sp, color = StudioTextSecondary)
+private fun DuckingPill(active: Boolean, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (active) NeonCyan.copy(alpha = 0.15f) else StudioMutedAccent)
+            .border(1.dp, if (active) NeonCyan else StudioCardBorder, RoundedCornerShape(50))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Icon(
+            Icons.Default.VolumeDown,
+            contentDescription = null,
+            tint = if (active) NeonCyan else StudioTextSecondary,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(6.dp))
         Text(
-            text = value,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = StudioTextPrimary,
-            fontFamily = FontFamily.Monospace
+            "AUTO-DUCKING",
+            color = if (active) NeonCyan else StudioTextSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
         )
     }
 }
 
 @Composable
-fun FadersConsoleCard(
-    state: StudioUiState,
-    viewModel: RadioStudioViewModel
-) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = StudioCardSurface),
-        shape = RoundedCornerShape(12.dp),
+private fun MicMuteButton(isMuted: Boolean, onClick: () -> Unit) {
+    val bg = if (isMuted) {
+        Brush.horizontalGradient(listOf(Color(0xFF3A1220), Color(0xFF2A0E18)))
+    } else {
+        Brush.horizontalGradient(listOf(NeonCyan, NeonPurple))
+    }
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, StudioCardBorder, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(bg)
+            .clickable { onClick() }
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "MEZCLADOR DE CANALES",
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = StudioTextPrimary,
-                letterSpacing = 1.sp
-            )
+        Icon(
+            if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+            contentDescription = null,
+            tint = if (isMuted) OnAirRed else StudioDarkBackground,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (isMuted) "MIC SILENCIADO" else "MIC ABIERTO — PULSA PARA SILENCIAR",
+            color = if (isMuted) OnAirRed else StudioDarkBackground,
+            fontWeight = FontWeight.Black,
+            fontSize = 13.sp
+        )
+    }
+}
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Mic Channel
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = { viewModel.toggleMicMute() },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .clip(CircleShape)
-                                .background(if (state.isMicMuted) OnAirRed else StudioMutedAccent)
-                        ) {
-                            Icon(
-                                imageVector = if (state.isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                                contentDescription = "Mic Mute",
-                                tint = if (state.isMicMuted) Color.White else NeonCyan
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(text = "Micrófono Principal", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(
-                                text = if (state.isMicMuted) "SILENCIADO" else "Ganan.: ${(state.micGain * 100).toInt()}%",
-                                fontSize = 11.sp,
-                                color = if (state.isMicMuted) OnAirRed else StudioTextSecondary
-                            )
-                        }
-                    }
-
-                    // Ducking Switch
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "Ducking Auto", fontSize = 11.sp, color = StudioTextSecondary)
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Switch(
-                            checked = state.isDuckingEnabled,
-                            onCheckedChange = { viewModel.toggleDucking() },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.Black,
-                                checkedTrackColor = NeonCyan
-                            )
-                        )
-                    }
-                }
-
-                Slider(
-                    value = state.micGain,
-                    onValueChange = { viewModel.setMicGain(it) },
-                    valueRange = 0.0f..2.0f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = NeonCyan,
-                        activeTrackColor = NeonCyan,
-                        inactiveTrackColor = StudioCardBorder
-                    )
-                )
+@Composable
+private fun QuickEqStripCard(state: StudioUiState, viewModel: RadioStudioViewModel) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(StudioCardSurface)
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(24.dp))
+            .padding(20.dp)
+    ) {
+        Text("ECUALIZADOR RÁPIDO", color = StudioTextPrimary, fontWeight = FontWeight.Black, fontSize = 15.sp)
+        Spacer(Modifier.height(16.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            EqPillKnob("GRAVES", state.eqLowDb, NeonPurple) {
+                viewModel.setEqGains(it, state.eqMidDb, state.eqHighDb)
             }
-
-            HorizontalDivider(color = StudioCardBorder, modifier = Modifier.padding(vertical = 12.dp))
-
-            // Music / Deck Channel
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = "Music Deck",
-                            tint = NeonPurple,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(text = "Deck de Música / Audio", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(
-                                text = "Volumen: ${(state.musicVolume * 100).toInt()}%",
-                                fontSize = 11.sp,
-                                color = StudioTextSecondary
-                            )
-                        }
-                    }
-                }
-
-                Slider(
-                    value = state.musicVolume,
-                    onValueChange = { viewModel.setMusicVolume(it) },
-                    valueRange = 0.0f..1.0f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = NeonPurple,
-                        activeTrackColor = NeonPurple,
-                        inactiveTrackColor = StudioCardBorder
-                    )
-                )
+            EqPillKnob("MEDIOS", state.eqMidDb, NeonCyan) {
+                viewModel.setEqGains(state.eqLowDb, it, state.eqHighDb)
             }
-
-            HorizontalDivider(color = StudioCardBorder, modifier = Modifier.padding(vertical = 12.dp))
-
-            // Master Volume Channel
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Master",
-                            tint = OnAirRed,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(text = "Master Out Principal", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                            Text(
-                                text = "Nivel: ${(state.masterVolume * 100).toInt()}%",
-                                fontSize = 11.sp,
-                                color = StudioTextSecondary
-                            )
-                        }
-                    }
-                }
-
-                Slider(
-                    value = state.masterVolume,
-                    onValueChange = { viewModel.setMasterVolume(it) },
-                    valueRange = 0.0f..1.0f,
-                    colors = SliderDefaults.colors(
-                        thumbColor = OnAirRed,
-                        activeTrackColor = OnAirRed,
-                        inactiveTrackColor = StudioCardBorder
-                    )
-                )
+            EqPillKnob("AGUDOS", state.eqHighDb, OnAirRed) {
+                viewModel.setEqGains(state.eqLowDb, state.eqMidDb, it)
             }
         }
     }
+}
+
+@Composable
+private fun EqPillKnob(
+    label: String,
+    valueDb: Float,
+    accent: Color,
+    onValueChange: (Float) -> Unit
+) {
+    val normalized = ((valueDb + 12f) / 24f).coerceIn(0f, 1f)
+    ModernKnob(
+        label = label,
+        value = normalized,
+        onValueChange = { onValueChange(it * 24f - 12f) },
+        accentColor = accent,
+        size = 72.dp,
+        valueText = "${if (valueDb >= 0) "+" else ""}${valueDb.toInt()}dB"
+    )
 }
 
 @Composable
