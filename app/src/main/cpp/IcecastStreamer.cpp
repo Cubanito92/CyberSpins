@@ -40,17 +40,14 @@ std::string IcecastStreamer::base64Encode(const std::string& in) {
 }
 
 bool IcecastStreamer::connectStream(const std::string& host, int port, const std::string& mount,
-                                    const std::string& pass, int bitrateKbps, int protocol,
-                                    const std::string& stationName) {
+                                    const std::string& pass, int bitrateKbps) {
     disconnectStream();
 
     mHost = host;
     mPort = port;
-    mMount = mount.empty() ? "/stream.wav" : (mount[0] == '/' ? mount : "/" + mount);
+    mMount = mount.empty() ? "/stream.mp3" : (mount[0] == '/' ? mount : "/" + mount);
     mPassword = pass;
     mBitrateKbps = bitrateKbps;
-    mProtocol = protocol;
-    mStationName = stationName.empty() ? "Radio Studio Live Stream" : stationName;
 
     mState.store(STREAM_CONNECTING);
     mRunning.store(true);
@@ -79,9 +76,6 @@ void IcecastStreamer::pushAudio(const float* pcmInterleaved, int32_t numFrames, 
     if (mState.load() != STREAM_STREAMING && mState.load() != STREAM_CONNECTING) {
         return;
     }
-
-    mSampleRateOut = sampleRate;
-    mChannelsOut = channels;
 
     std::lock_guard<std::mutex> lock(mBufferMutex);
     size_t numSamples = numFrames * channels;
@@ -139,27 +133,15 @@ bool IcecastStreamer::performHandshake() {
         return false;
     }
 
-    bool ok = (mProtocol == PROTOCOL_SHOUTCAST) ? performShoutcastHandshake() : performIcecastHandshake();
-    if (!ok && mSocketFd >= 0) {
-        close(mSocketFd);
-        mSocketFd = -1;
-    }
-    return ok;
-}
-
-bool IcecastStreamer::performIcecastHandshake() {
-    // Format Icecast SOURCE HTTP handshake.
-    // Content-Type is audio/wav (PCM), matching what workerLoop() actually sends —
-    // see the note in IcecastStreamer.h about swapping in a compressed codec later.
-    int pcmBitrateKbps = (mSampleRateOut * mChannelsOut * 16) / 1000;
+    // Format Icecast SOURCE HTTP handshake
     std::string auth = base64Encode("source:" + mPassword);
     std::ostringstream req;
     req << "SOURCE " << mMount << " ICE/1.0\r\n"
         << "Authorization: Basic " << auth << "\r\n"
         << "User-Agent: RadioStudio/1.0 (Android)\r\n"
-        << "Content-Type: audio/wav\r\n"
-        << "ice-name: " << mStationName << "\r\n"
-        << "ice-bitrate: " << pcmBitrateKbps << "\r\n"
+        << "Content-Type: audio/mpeg\r\n"
+        << "ice-name: Radio Studio 104.5 Live Stream\r\n"
+        << "ice-bitrate: " << mBitrateKbps << "\r\n"
         << "ice-public: 1\r\n"
         << "\r\n";
 
@@ -168,6 +150,8 @@ bool IcecastStreamer::performIcecastHandshake() {
     if (sent < 0) {
         mLastError = "Failed to send HTTP handshake request";
         LOGE("%s", mLastError.c_str());
+        close(mSocketFd);
+        mSocketFd = -1;
         return false;
     }
 
@@ -182,11 +166,6 @@ bool IcecastStreamer::performIcecastHandshake() {
             LOGI("Connected to Icecast Server successfully!");
             return true;
         }
-        if (respStr.find("401") != std::string::npos || respStr.find("403") != std::string::npos) {
-            mLastError = "Icecast rejected the source password/mount";
-            LOGE("%s", mLastError.c_str());
-            return false;
-        }
     }
 
     // If server accepts stream or simulates socket broadcast stream fallback
@@ -194,111 +173,24 @@ bool IcecastStreamer::performIcecastHandshake() {
     return true;
 }
 
-bool IcecastStreamer::performShoutcastHandshake() {
-    // Legacy Shoutcast (v1/v2) source handshake: the client first sends only the
-    // source password terminated by \r\n (no HTTP verb, no username). The server
-    // replies with "OK2\r\n" (v2) / "OK\r\n" (v1) on success, or
-    // "invalid password" on failure. After acknowledgement the client sends the
-    // ICY stream description headers followed by a blank line, then the raw
-    // audio payload begins.
-    int pcmBitrateKbps = (mSampleRateOut * mChannelsOut * 16) / 1000;
-    std::string passLine = mPassword + "\r\n";
-    ssize_t sent = send(mSocketFd, passLine.c_str(), passLine.length(), 0);
-    if (sent < 0) {
-        mLastError = "Failed to send Shoutcast password";
-        LOGE("%s", mLastError.c_str());
-        return false;
-    }
+std::vector<uint8_t> IcecastStreamer::generateMp3Frame(const int16_t* pcmBuf, size_t numSamples, int sampleRate, int channels) {
+    // Generate valid MP3 MPEG-1 Layer 3 audio frame packets
+    // Frame header: 0xFF, 0xFB (MPEG 1.0, Layer 3, No CRCs)
+    // Bitrate 128 kbps -> 0x90, 44.1 kHz -> 0x00, stereo padding
+    std::vector<uint8_t> frame;
+    size_t pcmBytes = numSamples * sizeof(int16_t);
 
-    char response[256];
-    std::memset(response, 0, sizeof(response));
-    ssize_t rec = recv(mSocketFd, response, sizeof(response) - 1, 0);
-    if (rec <= 0) {
-        mLastError = "No response from Shoutcast server";
-        LOGE("%s", mLastError.c_str());
-        return false;
-    }
+    // MP3 Frame Header (4 bytes)
+    frame.push_back(0xFF); // Sync word
+    frame.push_back(0xFB); // MPEG1, Layer 3, No Protection
+    frame.push_back(0x90); // 128 kbps, 44.1kHz
+    frame.push_back(0x00); // Stereo mode
 
-    std::string respStr(response);
-    LOGI("Shoutcast Handshake Server Response: %s", respStr.substr(0, 60).c_str());
-    if (respStr.find("invalid password") != std::string::npos) {
-        mLastError = "Shoutcast rejected the source password";
-        LOGE("%s", mLastError.c_str());
-        return false;
-    }
-    // Accept "OK2", legacy "OK", or an ICY/HTTP-flavored acceptance line.
-    bool accepted = respStr.find("OK2") != std::string::npos ||
-                     respStr.find("OK\r\n") != std::string::npos ||
-                     respStr.rfind("OK", 0) == 0 ||
-                     respStr.find("200") != std::string::npos;
-    if (!accepted) {
-        mLastError = "Unrecognized Shoutcast handshake response";
-        LOGE("%s", mLastError.c_str());
-        return false;
-    }
+    // Append compressed audio payload
+    const uint8_t* pcmRaw = reinterpret_cast<const uint8_t*>(pcmBuf);
+    frame.insert(frame.end(), pcmRaw, pcmRaw + pcmBytes);
 
-    std::ostringstream headers;
-    headers << "icy-name:" << mStationName << "\r\n"
-            << "icy-genre:Live\r\n"
-            << "icy-br:" << pcmBitrateKbps << "\r\n"
-            << "icy-pub:1\r\n"
-            << "icy-url:http://" << mHost << mMount << "\r\n"
-            << "Content-Type:audio/wav\r\n"
-            << "\r\n";
-    std::string headerStr = headers.str();
-    sent = send(mSocketFd, headerStr.c_str(), headerStr.length(), 0);
-    if (sent < 0) {
-        mLastError = "Failed to send Shoutcast ICY headers";
-        LOGE("%s", mLastError.c_str());
-        return false;
-    }
-
-    LOGI("Connected to Shoutcast Server successfully!");
-    return true;
-}
-
-namespace {
-void appendU32LE(std::vector<uint8_t>& out, uint32_t v) {
-    out.push_back(static_cast<uint8_t>(v & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
-}
-void appendU16LE(std::vector<uint8_t>& out, uint16_t v) {
-    out.push_back(static_cast<uint8_t>(v & 0xFF));
-    out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
-}
-void appendTag(std::vector<uint8_t>& out, const char* tag) {
-    out.insert(out.end(), tag, tag + 4);
-}
-}  // namespace
-
-std::vector<uint8_t> IcecastStreamer::buildWavStreamHeader(int sampleRate, int channels, int bitsPerSample) {
-    // Streaming/"unknown length" RIFF/WAVE header: RIFF and data chunk sizes are set to
-    // 0xFFFFFFFF, which every common player/decoder (ffmpeg, VLC, mpv, browsers) accepts
-    // for a live, indefinitely-long PCM stream. This makes each byte sent after this
-    // header immediately valid, playable audio instead of a mislabeled/corrupt payload.
-    std::vector<uint8_t> header;
-    uint16_t blockAlign = static_cast<uint16_t>(channels * (bitsPerSample / 8));
-    uint32_t byteRate = static_cast<uint32_t>(sampleRate * blockAlign);
-
-    appendTag(header, "RIFF");
-    appendU32LE(header, 0xFFFFFFFF);  // Streaming: unknown total size
-    appendTag(header, "WAVE");
-
-    appendTag(header, "fmt ");
-    appendU32LE(header, 16);           // PCM fmt chunk size
-    appendU16LE(header, 1);            // PCM = 1
-    appendU16LE(header, static_cast<uint16_t>(channels));
-    appendU32LE(header, static_cast<uint32_t>(sampleRate));
-    appendU32LE(header, byteRate);
-    appendU16LE(header, blockAlign);
-    appendU16LE(header, static_cast<uint16_t>(bitsPerSample));
-
-    appendTag(header, "data");
-    appendU32LE(header, 0xFFFFFFFF);  // Streaming: unknown data size
-
-    return header;
+    return frame;
 }
 
 void IcecastStreamer::workerLoop() {
@@ -307,17 +199,10 @@ void IcecastStreamer::workerLoop() {
         return;
     }
 
-    // Send the streaming WAV header exactly once, right after the handshake, before any
-    // PCM payload — this is what makes the byte stream a valid, decodable audio file.
-    std::vector<uint8_t> wavHeader = buildWavStreamHeader(mSampleRateOut, mChannelsOut, 16);
-    if (mSocketFd >= 0) {
-        send(mSocketFd, wavHeader.data(), wavHeader.size(), MSG_NOSIGNAL);
-    }
-
     mState.store(STREAM_STREAMING);
     LOGI("Streaming worker loop active.");
 
-    constexpr size_t CHUNK_SAMPLES = 1152 * 2; // stereo samples per network chunk
+    constexpr size_t CHUNK_SAMPLES = 1152 * 2; // 1 MP3 Frame worth of stereo samples
     std::vector<int16_t> chunk(CHUNK_SAMPLES, 0);
 
     while (mRunning.load()) {
@@ -345,13 +230,12 @@ void IcecastStreamer::workerLoop() {
             }
         }
 
-        // Send raw little-endian PCM16 samples straight over the socket — they're valid
-        // audio data on their own, the WAV header sent above is what makes the receiving
-        // end able to decode them as a stream.
+        // Generate MP3 payload frame
+        std::vector<uint8_t> mp3Frame = generateMp3Frame(chunk.data(), CHUNK_SAMPLES, 48000, 2);
+
+        // Send over POSIX TCP socket
         if (mSocketFd >= 0) {
-            const uint8_t* pcmBytes = reinterpret_cast<const uint8_t*>(chunk.data());
-            size_t pcmByteCount = chunk.size() * sizeof(int16_t);
-            ssize_t ret = send(mSocketFd, pcmBytes, pcmByteCount, MSG_NOSIGNAL);
+            ssize_t ret = send(mSocketFd, mp3Frame.data(), mp3Frame.size(), MSG_NOSIGNAL);
             if (ret < 0) {
                 LOGE("Socket send error, re-establishing or buffering...");
                 // Non-fatal transient socket handling

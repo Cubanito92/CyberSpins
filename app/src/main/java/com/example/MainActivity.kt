@@ -2,8 +2,9 @@ package com.example
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,48 +19,69 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: RadioStudioViewModel by viewModels()
 
-    private val requestPermissionsLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { _: Map<String, Boolean> ->
-        // Resultado manejado por el sistema; el motor de audio y el
-        // explorador de música vuelven a comprobar el permiso cuando se usan.
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        // Permission result handled
     }
+
+    private val pickSongDeckALauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let { onSongPicked(deck = 0, uri = it) } }
+
+    private val pickSongDeckBLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> uri?.let { onSongPicked(deck = 1, uri = it) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        checkAndRequestPermissions()
+        checkAndRequestAudioPermission()
 
         setContent {
             RadioStudioTheme {
-                StudioConsoleScreen(viewModel = viewModel)
+                StudioConsoleScreen(
+                    viewModel = viewModel,
+                    onPickSongForDeckA = { pickSongDeckALauncher.launch(arrayOf("audio/*")) },
+                    onPickSongForDeckB = { pickSongDeckBLauncher.launch(arrayOf("audio/*")) }
+                )
             }
         }
     }
 
-    private fun checkAndRequestPermissions() {
-        val needed = mutableListOf<String>()
+    private fun onSongPicked(deck: Int, uri: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (e: SecurityException) {
+            // Some providers don't support persistable permissions; the
+            // MediaPlayer can still read it for this session.
+        }
+        val name = queryDisplayName(uri) ?: "Canción"
+        viewModel.loadTrack(deck, uri, name)
+    }
 
+    private fun queryDisplayName(uri: Uri): String? {
+        return try {
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun checkAndRequestAudioPermission() {
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            needed.add(Manifest.permission.RECORD_AUDIO)
-        }
-
-        val mediaPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.READ_MEDIA_AUDIO
-        } else {
-            Manifest.permission.READ_EXTERNAL_STORAGE
-        }
-        if (ContextCompat.checkSelfPermission(this, mediaPermission) != PackageManager.PERMISSION_GRANTED) {
-            needed.add(mediaPermission)
-        }
-
-        if (needed.isNotEmpty()) {
-            requestPermissionsLauncher.launch(needed.toTypedArray())
+            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 }

@@ -1,7 +1,5 @@
 package com.example.ui.components
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
@@ -9,8 +7,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -28,11 +24,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -46,7 +44,9 @@ import kotlin.math.sin
 @Composable
 fun StudioConsoleScreen(
     viewModel: RadioStudioViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onPickSongForDeckA: () -> Unit = {},
+    onPickSongForDeckB: () -> Unit = {}
 ) {
     val state by viewModel.uiState.collectAsState()
 
@@ -110,7 +110,12 @@ fun StudioConsoleScreen(
                 .padding(innerPadding)
         ) {
             when (state.activeTab) {
-                0 -> MainConsoleTab(state = state, viewModel = viewModel)
+                0 -> MainConsoleTab(
+                    state = state,
+                    viewModel = viewModel,
+                    onPickSongForDeckA = onPickSongForDeckA,
+                    onPickSongForDeckB = onPickSongForDeckB
+                )
                 1 -> EqualizerAndFxTab(state = state, viewModel = viewModel)
                 2 -> ServerStreamingTab(state = state, viewModel = viewModel)
                 3 -> PlaylistTab(state = state, viewModel = viewModel)
@@ -242,16 +247,6 @@ fun OnAirHeaderBar(
                 }
             }
 
-            if (state.connectionError != null) {
-                Text(
-                    text = state.connectionError,
-                    fontSize = 11.sp,
-                    color = OnAirRed,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
 
             // Peak Master VU Meter
@@ -314,135 +309,276 @@ fun MasterVuMeter(peak: Float) {
 @Composable
 fun MainConsoleTab(
     state: StudioUiState,
-    viewModel: RadioStudioViewModel
+    viewModel: RadioStudioViewModel,
+    onPickSongForDeckA: () -> Unit = {},
+    onPickSongForDeckB: () -> Unit = {}
 ) {
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        MasterVuMeter(peak = state.vuPeakLevel)
-        MixerRackCard(state, viewModel)
-        QuickEqStripCard(state, viewModel)
-        SoundboardGridCard(state = state, viewModel = viewModel)
-        NativeEngineInfoCard(state)
+        // Two-turntable DJ console: load a song per deck, spin while
+        // playing, mix them with the crossfader.
+        item {
+            DjDecksCard(
+                state = state,
+                viewModel = viewModel,
+                onPickSongForDeckA = onPickSongForDeckA,
+                onPickSongForDeckB = onPickSongForDeckB
+            )
+        }
+
+        // Mic + Master channel strip
+        item {
+            FadersConsoleCard(state = state, viewModel = viewModel)
+        }
+
+        // Low Latency Native Engine Card
+        item {
+            NativeEngineInfoCard(state = state)
+        }
+
+        // Soundboard Instant Effects Grid
+        item {
+            SoundboardGridCard(state = state, viewModel = viewModel)
+        }
     }
 }
 
 @Composable
-private fun MixerRackCard(state: StudioUiState, viewModel: RadioStudioViewModel) {
+fun DjDecksCard(
+    state: StudioUiState,
+    viewModel: RadioStudioViewModel,
+    onPickSongForDeckA: () -> Unit,
+    onPickSongForDeckB: () -> Unit
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = StudioCardSurface),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(12.dp))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "CONSOLA DJ - 2 PLATOS",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = StudioTextPrimary,
+                letterSpacing = 1.sp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TurntableDeck(
+                    modifier = Modifier.weight(1f),
+                    label = "PLATO A",
+                    accentColor = NeonCyan,
+                    deck = state.deckA,
+                    onLoad = onPickSongForDeckA,
+                    onPlayPause = { viewModel.toggleDeckPlayPause(0) },
+                    onVolumeChange = { viewModel.setDeckVolume(0, it) }
+                )
+                TurntableDeck(
+                    modifier = Modifier.weight(1f),
+                    label = "PLATO B",
+                    accentColor = NeonPurple,
+                    deck = state.deckB,
+                    onLoad = onPickSongForDeckB,
+                    onPlayPause = { viewModel.toggleDeckPlayPause(1) },
+                    onVolumeChange = { viewModel.setDeckVolume(1, it) }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Crossfader
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(text = "A", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = NeonCyan)
+                    Text(
+                        text = "CROSSFADER",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = StudioTextSecondary,
+                        letterSpacing = 1.sp
+                    )
+                    Text(text = "B", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = NeonPurple)
+                }
+                Slider(
+                    value = state.crossfaderPosition,
+                    onValueChange = { viewModel.setCrossfader(it) },
+                    valueRange = -1f..1f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = StudioTextPrimary,
+                        activeTrackColor = NeonCyan,
+                        inactiveTrackColor = NeonPurple.copy(alpha = 0.5f)
+                    )
+                )
+                Text(
+                    text = "Al terminar una canción, el volumen baja solo y sube el del otro plato.",
+                    fontSize = 10.sp,
+                    color = StudioTextSecondary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun TurntableDeck(
+    modifier: Modifier = Modifier,
+    label: String,
+    accentColor: Color,
+    deck: DeckUiState,
+    onLoad: () -> Unit,
+    onPlayPause: () -> Unit,
+    onVolumeChange: (Float) -> Unit
+) {
+    // The disc keeps spinning smoothly while playing and freezes exactly
+    // where it was when paused - like a real turntable needle drop.
+    var rotationDegrees by remember { mutableStateOf(0f) }
+    LaunchedEffect(deck.isPlaying) {
+        if (deck.isPlaying) {
+            var lastNanos = withFrameNanos { it }
+            while (true) {
+                val nowNanos = withFrameNanos { it }
+                val deltaSeconds = (nowNanos - lastNanos) / 1_000_000_000f
+                lastNanos = nowNanos
+                rotationDegrees = (rotationDegrees + deltaSeconds * 90f) % 360f // ~33 RPM feel
+            }
+        }
+    }
+
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Brush.verticalGradient(listOf(StudioCardSurface, StudioDarkBackground)))
-            .border(1.dp, StudioCardBorder, RoundedCornerShape(24.dp))
-            .padding(20.dp)
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("MEZCLADOR", color = StudioTextPrimary, fontWeight = FontWeight.Black, fontSize = 15.sp)
-            DuckingPill(active = state.isDuckingEnabled, onClick = { viewModel.toggleDucking() })
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            ModernKnob(
-                label = "MIC",
-                value = state.micGain / 2f,
-                onValueChange = { viewModel.setMicGain((it * 2f).coerceIn(0f, 2f)) },
-                accentColor = if (state.isMicMuted) StudioTextSecondary else NeonCyan,
-                valueText = if (state.isMicMuted) "MUTE" else "${(state.micGain * 100).toInt()}%"
-            )
-            ModernKnob(
-                label = "MÚSICA",
-                value = state.musicVolume,
-                onValueChange = { viewModel.setMusicVolume(it) },
-                accentColor = NeonPurple,
-                valueText = "${(state.musicVolume * 100).toInt()}%"
-            )
-            ModernKnob(
-                label = "MASTER",
-                value = state.masterVolume,
-                onValueChange = { viewModel.setMasterVolume(it) },
-                accentColor = OnAirRed,
-                valueText = "${(state.masterVolume * 100).toInt()}%"
-            )
-        }
-
-        Spacer(Modifier.height(18.dp))
-
-        MicMuteButton(isMuted = state.isMicMuted, onClick = { viewModel.toggleMicMute() })
-    }
-}
-
-@Composable
-private fun DuckingPill(active: Boolean, onClick: () -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(if (active) NeonCyan.copy(alpha = 0.15f) else StudioMutedAccent)
-            .border(1.dp, if (active) NeonCyan else StudioCardBorder, RoundedCornerShape(50))
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)
-    ) {
-        Icon(
-            Icons.Default.VolumeDown,
-            contentDescription = null,
-            tint = if (active) NeonCyan else StudioTextSecondary,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(6.dp))
         Text(
-            "AUTO-DUCKING",
-            color = if (active) NeonCyan else StudioTextSecondary,
+            text = label,
             fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            color = accentColor,
+            letterSpacing = 1.sp
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Canvas(
+            modifier = Modifier
+                .size(110.dp)
+                .clickable(enabled = deck.isLoaded, onClick = onPlayPause)
+        ) {
+            val radius = size.minDimension / 2f
+            val center = Offset(size.width / 2f, size.height / 2f)
+
+            // Vinyl body
+            drawCircle(color = Color(0xFF11151C), radius = radius, center = center)
+            drawCircle(
+                color = StudioCardBorder,
+                radius = radius,
+                center = center,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+            )
+            // Grooves
+            for (i in 1..4) {
+                drawCircle(
+                    color = Color(0xFF20262F),
+                    radius = radius * (i / 5f),
+                    center = center,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.2f)
+                )
+            }
+            // Rotating label + notch so spinning is visible
+            rotate(degrees = rotationDegrees, pivot = center) {
+                drawCircle(color = accentColor.copy(alpha = 0.85f), radius = radius * 0.32f, center = center)
+                drawCircle(color = Color.Black, radius = radius * 0.06f, center = center)
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.9f),
+                    radius = radius * 0.035f,
+                    center = Offset(center.x, center.y - radius * 0.32f)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = if (deck.title.isNotEmpty()) deck.title else "Sin canción",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (deck.title.isNotEmpty()) StudioTextPrimary else StudioTextSecondary,
+            maxLines = 1,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+        if (deck.durationMs > 0) {
+            Text(
+                text = "${formatMs(deck.positionMs)} / ${formatMs(deck.durationMs)}",
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = StudioTextSecondary
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                onClick = onLoad,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = accentColor),
+                border = androidx.compose.foundation.BorderStroke(1.dp, accentColor),
+                modifier = Modifier.height(34.dp)
+            ) {
+                Icon(Icons.Default.FolderOpen, contentDescription = "Cargar", modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(text = "Cargar", fontSize = 11.sp)
+            }
+            Spacer(modifier = Modifier.width(6.dp))
+            IconButton(
+                onClick = onPlayPause,
+                enabled = deck.isLoaded,
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(if (deck.isLoaded) accentColor else StudioMutedAccent)
+            ) {
+                Icon(
+                    imageVector = if (deck.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = "Play/Pause",
+                    tint = Color.Black
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(text = "Vol. ${(deck.volume * 100).toInt()}%", fontSize = 10.sp, color = StudioTextSecondary)
+        Slider(
+            value = deck.volume,
+            onValueChange = onVolumeChange,
+            valueRange = 0f..1f,
+            colors = SliderDefaults.colors(
+                thumbColor = accentColor,
+                activeTrackColor = accentColor,
+                inactiveTrackColor = StudioCardBorder
+            )
         )
     }
 }
 
-@Composable
-private fun MicMuteButton(isMuted: Boolean, onClick: () -> Unit) {
-    val bg = if (isMuted) {
-        Brush.horizontalGradient(listOf(Color(0xFF3A1220), Color(0xFF2A0E18)))
-    } else {
-        Brush.horizontalGradient(listOf(NeonCyan, NeonPurple))
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(bg)
-            .clickable { onClick() }
-            .padding(vertical = 14.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-            contentDescription = null,
-            tint = if (isMuted) OnAirRed else StudioDarkBackground,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (isMuted) "MIC SILENCIADO" else "MIC ABIERTO — PULSA PARA SILENCIAR",
-            color = if (isMuted) OnAirRed else StudioDarkBackground,
-            fontWeight = FontWeight.Black,
-            fontSize = 13.sp
-        )
-    }
+fun formatMs(ms: Int): String {
+    val totalSeconds = ms / 1000
+    val mins = totalSeconds / 60
+    val secs = totalSeconds % 60
+    return String.format("%02d:%02d", mins, secs)
 }
 
 @Composable
@@ -519,50 +655,128 @@ fun InfoTile(label: String, value: String) {
 }
 
 @Composable
-private fun QuickEqStripCard(state: StudioUiState, viewModel: RadioStudioViewModel) {
-    Column(
+fun FadersConsoleCard(
+    state: StudioUiState,
+    viewModel: RadioStudioViewModel
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = StudioCardSurface),
+        shape = RoundedCornerShape(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(StudioCardSurface)
-            .border(1.dp, StudioCardBorder, RoundedCornerShape(24.dp))
-            .padding(20.dp)
+            .border(1.dp, StudioCardBorder, RoundedCornerShape(12.dp))
     ) {
-        Text("ECUALIZADOR RÁPIDO", color = StudioTextPrimary, fontWeight = FontWeight.Black, fontSize = 15.sp)
-        Spacer(Modifier.height(16.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            EqPillKnob("GRAVES", state.eqLowDb, NeonPurple) {
-                viewModel.setEqGains(it, state.eqMidDb, state.eqHighDb)
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = "MEZCLADOR DE CANALES",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = StudioTextPrimary,
+                letterSpacing = 1.sp
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Mic Channel
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { viewModel.toggleMicMute() },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(if (state.isMicMuted) OnAirRed else StudioMutedAccent)
+                        ) {
+                            Icon(
+                                imageVector = if (state.isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                contentDescription = "Mic Mute",
+                                tint = if (state.isMicMuted) Color.White else NeonCyan
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(text = "Micrófono Principal", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                text = if (state.isMicMuted) "SILENCIADO" else "Ganan.: ${(state.micGain * 100).toInt()}%",
+                                fontSize = 11.sp,
+                                color = if (state.isMicMuted) OnAirRed else StudioTextSecondary
+                            )
+                        }
+                    }
+
+                    // Ducking Switch
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "Ducking Auto", fontSize = 11.sp, color = StudioTextSecondary)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Switch(
+                            checked = state.isDuckingEnabled,
+                            onCheckedChange = { viewModel.toggleDucking() },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.Black,
+                                checkedTrackColor = NeonCyan
+                            )
+                        )
+                    }
+                }
+
+                Slider(
+                    value = state.micGain,
+                    onValueChange = { viewModel.setMicGain(it) },
+                    valueRange = 0.0f..2.0f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = NeonCyan,
+                        activeTrackColor = NeonCyan,
+                        inactiveTrackColor = StudioCardBorder
+                    )
+                )
             }
-            EqPillKnob("MEDIOS", state.eqMidDb, NeonCyan) {
-                viewModel.setEqGains(state.eqLowDb, it, state.eqHighDb)
-            }
-            EqPillKnob("AGUDOS", state.eqHighDb, OnAirRed) {
-                viewModel.setEqGains(state.eqLowDb, state.eqMidDb, it)
+
+            HorizontalDivider(color = StudioCardBorder, modifier = Modifier.padding(vertical = 12.dp))
+
+            // Master Volume Channel
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                            contentDescription = "Master",
+                            tint = OnAirRed,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(text = "Master Out Principal", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(
+                                text = "Nivel: ${(state.masterVolume * 100).toInt()}%",
+                                fontSize = 11.sp,
+                                color = StudioTextSecondary
+                            )
+                        }
+                    }
+                }
+
+                Slider(
+                    value = state.masterVolume,
+                    onValueChange = { viewModel.setMasterVolume(it) },
+                    valueRange = 0.0f..1.0f,
+                    colors = SliderDefaults.colors(
+                        thumbColor = OnAirRed,
+                        activeTrackColor = OnAirRed,
+                        inactiveTrackColor = StudioCardBorder
+                    )
+                )
             }
         }
     }
-}
-
-@Composable
-private fun EqPillKnob(
-    label: String,
-    valueDb: Float,
-    accent: Color,
-    onValueChange: (Float) -> Unit
-) {
-    val normalized = ((valueDb + 12f) / 24f).coerceIn(0f, 1f)
-    ModernKnob(
-        label = label,
-        value = normalized,
-        onValueChange = { onValueChange(it * 24f - 12f) },
-        accentColor = accent,
-        size = 72.dp,
-        valueText = "${if (valueDb >= 0) "+" else ""}${valueDb.toInt()}dB"
-    )
 }
 
 @Composable
@@ -883,20 +1097,6 @@ fun ServerStreamingTab(
     var mountPoint by remember { mutableStateOf(state.streamConfig.mountPoint) }
     var password by remember { mutableStateOf(state.streamConfig.password) }
     var stationName by remember { mutableStateOf(state.streamConfig.stationName) }
-    var protocol by remember { mutableStateOf(state.streamConfig.protocol) }
-    var selectedBitrate by remember { mutableStateOf(state.streamConfig.bitrateKbps) }
-    var justSaved by remember { mutableStateOf(false) }
-
-    fun currentConfig() = StreamConfig(
-        serverUrl = serverUrl,
-        port = port,
-        mountPoint = mountPoint,
-        password = password,
-        stationName = stationName,
-        genre = state.streamConfig.genre,
-        bitrateKbps = selectedBitrate,
-        protocol = protocol
-    )
 
     LazyColumn(
         modifier = Modifier
@@ -922,40 +1122,9 @@ fun ServerStreamingTab(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(text = "Protocolo del Servidor", fontSize = 12.sp, color = StudioTextSecondary)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        StreamProtocolType.entries.forEach { option ->
-                            val isSel = protocol == option
-                            Surface(
-                                onClick = { protocol = option; justSaved = false },
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSel) NeonCyan else StudioMutedAccent,
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text(
-                                    text = option.label,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSel) Color.Black else Color.White,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 10.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
                     OutlinedTextField(
                         value = stationName,
-                        onValueChange = { stationName = it; justSaved = false },
+                        onValueChange = { stationName = it },
                         label = { Text("Nombre de la Estación") },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = NeonCyan,
@@ -969,9 +1138,8 @@ fun ServerStreamingTab(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = serverUrl,
-                            onValueChange = { serverUrl = it; justSaved = false },
+                            onValueChange = { serverUrl = it },
                             label = { Text("Host / IP Servidor") },
-                            placeholder = { Text("tu.servidor.com") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
                                 unfocusedBorderColor = StudioCardBorder
@@ -980,7 +1148,7 @@ fun ServerStreamingTab(
                         )
                         OutlinedTextField(
                             value = port,
-                            onValueChange = { port = it; justSaved = false },
+                            onValueChange = { port = it },
                             label = { Text("Puerto") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
@@ -995,7 +1163,7 @@ fun ServerStreamingTab(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = mountPoint,
-                            onValueChange = { mountPoint = it; justSaved = false },
+                            onValueChange = { mountPoint = it },
                             label = { Text("Punto de Montaje (Mount)") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
@@ -1005,9 +1173,8 @@ fun ServerStreamingTab(
                         )
                         OutlinedTextField(
                             value = password,
-                            onValueChange = { password = it; justSaved = false },
+                            onValueChange = { password = it },
                             label = { Text("Contraseña Fuente") },
-                            placeholder = { Text("••••••") },
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = NeonCyan,
                                 unfocusedBorderColor = StudioCardBorder
@@ -1018,61 +1185,38 @@ fun ServerStreamingTab(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(text = "Tasa de Bits (kbps)", fontSize = 12.sp, color = StudioTextSecondary)
+                    Text(text = "Tasa de Bits (Encoder Bitrate)", fontSize = 12.sp, color = StudioTextSecondary)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            .padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(64, 96, 128, 192, 320).forEach { bitrate ->
-                            val isSel = selectedBitrate == bitrate
-                            Surface(
-                                onClick = { selectedBitrate = bitrate; justSaved = false },
-                                shape = RoundedCornerShape(5.dp),
-                                color = if (isSel) NeonCyan else StudioMutedAccent,
+                        listOf(64, 128, 192, 320).forEach { bitrate ->
+                            val isSel = state.streamConfig.bitrateKbps == bitrate
+                            Button(
+                                onClick = {
+                                    viewModel.updateStreamConfig(
+                                        state.streamConfig.copy(
+                                            serverUrl = serverUrl,
+                                            port = port,
+                                            mountPoint = mountPoint,
+                                            password = password,
+                                            stationName = stationName,
+                                            bitrateKbps = bitrate
+                                        )
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isSel) NeonCyan else StudioMutedAccent,
+                                    contentColor = if (isSel) Color.Black else Color.White
+                                ),
+                                shape = RoundedCornerShape(6.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text(
-                                    text = "${bitrate}k",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isSel) Color.Black else Color.White,
-                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 6.dp)
-                                )
+                                Text(text = "$bitrate k", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Button(
-                        onClick = {
-                            viewModel.saveStreamConfig(currentConfig())
-                            justSaved = true
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonCyan,
-                            contentColor = Color.Black
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(imageVector = Icons.Default.Save, contentDescription = "Guardar")
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "GUARDAR CONFIGURACIÓN", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-
-                    if (justSaved) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Servidor guardado. Se usará esta configuración al transmitir.",
-                            fontSize = 11.sp,
-                            color = NeonCyan
-                        )
                     }
                 }
             }
@@ -1127,27 +1271,11 @@ fun PlaylistTab(
     state: StudioUiState,
     viewModel: RadioStudioViewModel
 ) {
-    val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            viewModel.setMusicFolder(uri)
-        }
-    }
-
-    val filteredPlaylist = remember(state.playlist, state.searchQuery) {
-        if (state.searchQuery.isBlank()) {
-            state.playlist
-        } else {
-            state.playlist.filter { it.title.contains(state.searchQuery, ignoreCase = true) }
-        }
-    }
-
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
             Row(
@@ -1170,128 +1298,54 @@ fun PlaylistTab(
             }
         }
 
-        item {
-            Button(
-                onClick = { folderPickerLauncher.launch(null) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = StudioMutedAccent,
-                    contentColor = NeonCyan
-                ),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(imageVector = Icons.Default.FolderOpen, contentDescription = "Añadir ruta")
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = state.musicFolderName?.let { "Carpeta: $it" } ?: "AÑADIR RUTA DE MÚSICA LOCAL",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp
-                )
-            }
-        }
-
-        item {
-            OutlinedTextField(
-                value = state.searchQuery,
-                onValueChange = { viewModel.setSearchQuery(it) },
-                placeholder = { Text("Buscar canción por nombre...") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Buscar") },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NeonCyan,
-                    unfocusedBorderColor = StudioCardBorder
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        if (state.isScanningFolder) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = NeonCyan, strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Explorando carpeta...", fontSize = 12.sp, color = StudioTextSecondary)
-                }
-            }
-        } else if (state.playlist.isEmpty()) {
-            item {
-                Text(
-                    text = "No hay música cargada. Toca \"Añadir ruta\" y elige la carpeta de música de tu teléfono.",
-                    fontSize = 12.sp,
-                    color = StudioTextSecondary,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-        } else if (filteredPlaylist.isEmpty()) {
-            item {
-                Text(
-                    text = "Sin resultados para \"${state.searchQuery}\"",
-                    fontSize = 12.sp,
-                    color = StudioTextSecondary,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-        }
-
-        items(filteredPlaylist) { item ->
+        items(state.playlist) { item ->
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = if (item.isPlaying) StudioMutedAccent else StudioCardSurface
                 ),
-                shape = RoundedCornerShape(6.dp),
+                shape = RoundedCornerShape(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         1.dp,
                         if (item.isPlaying) NeonCyan else StudioCardBorder,
-                        RoundedCornerShape(6.dp)
+                        RoundedCornerShape(8.dp)
                     )
-                    .clickable {
-                        if (item.isPlaying) viewModel.stopPlayback() else viewModel.playPlaylistItem(item.id)
-                    }
+                    .clickable { viewModel.playPlaylistItem(item.id) }
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(12.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = if (item.isPlaying) Icons.Default.PlayArrow else Icons.Default.MusicNote,
                             contentDescription = "Track",
                             tint = if (item.isPlaying) NeonCyan else StudioTextSecondary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
                             Text(
                                 text = item.title,
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                fontSize = 13.sp,
                                 color = if (item.isPlaying) NeonCyan else StudioTextPrimary
                             )
                             Text(
                                 text = item.artist,
-                                fontSize = 10.sp,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                fontSize = 11.sp,
                                 color = StudioTextSecondary
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
                     Text(
                         text = item.duration,
-                        fontSize = 10.sp,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         color = StudioTextSecondary
                     )

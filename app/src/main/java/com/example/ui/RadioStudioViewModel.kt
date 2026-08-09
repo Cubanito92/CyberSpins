@@ -1,48 +1,39 @@
 package com.example.ui
 
 import android.app.Application
-import android.content.Intent
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaFormat
-import android.media.MediaMetadataRetriever
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Uri
-import android.provider.DocumentsContract
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.audio.DeckPlayer
+import com.example.audio.MicEffects
 import com.example.audio.NativeAudioEngine
-import com.example.ui.components.formatDuration
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import kotlin.math.sqrt
 
-private const val TAG = "RadioStudioViewModel"
-
-enum class StreamProtocolType(val label: String, val nativeValue: Int) {
-    ICECAST("Icecast", NativeAudioEngine.PROTOCOL_ICECAST),
-    SHOUTCAST("Shoutcast", NativeAudioEngine.PROTOCOL_SHOUTCAST)
-}
+/** UI state for one turntable/deck. */
+data class DeckUiState(
+    val title: String = "",
+    val isLoaded: Boolean = false,
+    val isPlaying: Boolean = false,
+    val volume: Float = 1.0f,
+    val positionMs: Int = 0,
+    val durationMs: Int = 0
+)
 
 data class StreamConfig(
-    val serverUrl: String = "",
+    val serverUrl: String = "stream.radiostudio.live",
     val port: String = "8000",
-    val mountPoint: String = "/stream.wav",
-    val password: String = "",
-    val stationName: String = "Mi Radio Online",
+    val mountPoint: String = "/stream.mp3",
+    val password: String = "studio_pass_2026",
+    val stationName: String = "Radio Studio 104.5 FM Live",
     val genre: String = "Variety / Live Talk / Electronic",
     val bitrateKbps: Int = 128,
-    val protocol: StreamProtocolType = StreamProtocolType.ICECAST
+    val protocol: String = "Icecast v2"
 )
 
 data class SoundPad(
@@ -54,7 +45,7 @@ data class SoundPad(
 )
 
 data class PlaylistItem(
-    val id: String, // content:// URI string of the local audio file
+    val id: String,
     val title: String,
     val artist: String,
     val duration: String,
@@ -64,7 +55,6 @@ data class PlaylistItem(
 data class StudioUiState(
     val isLive: Boolean = false,
     val isConnecting: Boolean = false,
-    val connectionError: String? = null,
     val uptimeSeconds: Long = 0L,
     val masterVolume: Float = 0.85f,
     val micGain: Float = 1.0f,
@@ -93,182 +83,223 @@ data class StudioUiState(
         SoundPad(7, "BASS DROP", "graphic_eq", "DJ"),
         SoundPad(8, "VOX ID", "record_voice_over", "Voice")
     ),
-    val musicFolderUri: String? = null,
-    val musicFolderName: String? = null,
-    val isScanningFolder: Boolean = false,
-    val searchQuery: String = "",
-    val playlist: List<PlaylistItem> = emptyList(),
+    val playlist: List<PlaylistItem> = listOf(
+        PlaylistItem("1", "Studio Synth Drive", "Radio Studio ID", "03:45", isPlaying = true),
+        PlaylistItem("2", "Cybernetic Morning Show Track", "DJ Antigravity", "04:12"),
+        PlaylistItem("3", "Broadcast Station ID 01", "Voiceover Intro", "00:15"),
+        PlaylistItem("4", "Late Night Deep Waves", "Radio Synthwave", "05:20"),
+        PlaylistItem("5", "Commercial Break Promo", "Sponsor Audio", "00:30")
+    ),
     val isRecordingLocally: Boolean = false,
     val recordedDurationSeconds: Long = 0L,
-    val activeTab: Int = 0
+    val activeTab: Int = 0,
+    val deckA: DeckUiState = DeckUiState(volume = 1.0f),
+    val deckB: DeckUiState = DeckUiState(volume = 1.0f),
+    // -1f = solo Plato A, 0f = mitad y mitad, +1f = solo Plato B
+    val crossfaderPosition: Float = 0f
 )
 
 class RadioStudioViewModel(application: Application) : AndroidViewModel(application) {
 
     private val audioEngine = NativeAudioEngine()
+    private val micEffects = MicEffects()
+    private val deckPlayerA = DeckPlayer(application)
+    private val deckPlayerB = DeckPlayer(application)
     private val _uiState = MutableStateFlow(StudioUiState())
     val uiState: StateFlow<StudioUiState> = _uiState.asStateFlow()
 
-    private var connectionWatchJob: Job? = null
-    private var musicDecodeJob: Job? = null
+    // When a deck auto-crossfades into the other at the end of a track, we
+    // don't want the manual slider fighting it - this just tracks that an
+    // automatic fade is in progress so we skip the manual path meanwhile.
+    private var autoFading = false
 
     init {
-        // Load the user's previously saved server configuration (if any). The app
-        // never ships with a fixed/hardcoded server — this restores whatever the
-        // user typed and tapped "Guardar" on last time, or sane empty defaults.
-        val savedConfig = StreamConfigStore.load(application)
-        _uiState.update { it.copy(streamConfig = savedConfig) }
+        // Initialize Native Audio Settings
+        audioEngine.nativeSetMasterVolume(_uiState.value.masterVolume)
+        audioEngine.nativeSetMicGain(_uiState.value.micGain)
+        audioEngine.nativeSetMusicVolume(_uiState.value.musicVolume)
+        audioEngine.nativeSetNoiseGateThreshold(_uiState.value.noiseGateThresholdDb)
+        applyCrossfaderGains(_uiState.value.crossfaderPosition)
 
-        // Initialize Native Audio Settings so the engine matches the UI defaults
-        // from the very first frame it processes.
-        val initial = _uiState.value
-        audioEngine.nativeSetMasterVolume(initial.masterVolume)
-        audioEngine.nativeSetMicGain(initial.micGain)
-        audioEngine.nativeSetMusicVolume(initial.musicVolume)
-        audioEngine.nativeSetDuckingEnabled(initial.isDuckingEnabled)
-        audioEngine.nativeSetEqGains(initial.eqLowDb, initial.eqMidDb, initial.eqHighDb)
-        audioEngine.nativeSetVoiceEffects(initial.voiceReverb, initial.voicePitch, initial.noiseGateThresholdDb)
-
-        // Poll VU meter
+        // Poll VU meter and Uptime ticker
         viewModelScope.launch {
             while (true) {
                 delay(40) // ~25 FPS VU updates
                 val state = _uiState.value
-                val peak = if (state.isLive) audioEngine.nativeGetVuMeter() else 0.0f
+                val peak = if (state.isLive) {
+                    audioEngine.nativeGetVuMeter()
+                } else 0.0f
+
                 _uiState.update { it.copy(vuPeakLevel = peak) }
             }
         }
 
-        // Uptime counter + connection watchdog: if the socket to the Icecast server
-        // drops (lost internet, server restart, etc.) this is what flips the badge
-        // back to OFFLINE instead of leaving a stale "ON AIR" shown.
+        // Uptime counter
         viewModelScope.launch {
             while (true) {
                 delay(1000)
-                val state = _uiState.value
-                if (state.isLive) {
-                    val status = audioEngine.nativeGetStreamStatus()
-                    if (status == NativeAudioEngine.STREAM_STREAMING) {
-                        _uiState.update { it.copy(uptimeSeconds = it.uptimeSeconds + 1) }
-                    } else {
-                        Log.w(TAG, "Stream dropped (status=$status), going OFFLINE")
-                        audioEngine.nativeDisconnectStream()
-                        audioEngine.nativeStopEngine()
-                        _uiState.update {
-                            it.copy(
-                                isLive = false,
-                                uptimeSeconds = 0L,
-                                connectionError = "Se perdió la conexión con el servidor"
-                            )
-                        }
-                    }
+                if (_uiState.value.isLive) {
+                    _uiState.update { it.copy(uptimeSeconds = it.uptimeSeconds + 1) }
                 }
-                if (state.isRecordingLocally) {
+                if (_uiState.value.isRecordingLocally) {
                     _uiState.update { it.copy(recordedDurationSeconds = it.recordedDurationSeconds + 1) }
                 }
             }
         }
-    }
 
-    private fun hasInternetConnection(): Boolean {
-        val cm = getApplication<Application>().getSystemService(ConnectivityManager::class.java) ?: return true
-        val network = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(network) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        // Deck position/playing ticker + auto-crossfade at the end of a track
+        viewModelScope.launch {
+            while (true) {
+                delay(250)
+                _uiState.update {
+                    it.copy(
+                        deckA = it.deckA.copy(
+                            isPlaying = deckPlayerA.isPlaying,
+                            positionMs = deckPlayerA.positionMs,
+                            durationMs = deckPlayerA.durationMs
+                        ),
+                        deckB = it.deckB.copy(
+                            isPlaying = deckPlayerB.isPlaying,
+                            positionMs = deckPlayerB.positionMs,
+                            durationMs = deckPlayerB.durationMs
+                        )
+                    )
+                }
+                maybeAutoCrossfade()
+            }
+        }
     }
 
     fun toggleLiveBroadcast() {
-        val current = _uiState.value
-        if (current.isLive || current.isConnecting) {
-            connectionWatchJob?.cancel()
-            audioEngine.nativeDisconnectStream()
-            audioEngine.nativeStopEngine()
-            _uiState.update { it.copy(isLive = false, isConnecting = false, uptimeSeconds = 0L) }
-            return
-        }
-
-        if (!hasInternetConnection()) {
-            _uiState.update { it.copy(connectionError = "Sin conexión a Internet. Revisa tu red (Wi-Fi/datos) e inténtalo de nuevo.") }
-            return
-        }
-
-        _uiState.update { it.copy(isConnecting = true, connectionError = null) }
-
-        val engineStarted = audioEngine.nativeStartEngine()
-        if (!engineStarted) {
-            _uiState.update {
-                it.copy(isConnecting = false, connectionError = "No se pudo iniciar el motor de audio (revisa el permiso de micrófono)")
-            }
-            return
-        }
-
-        val cfg = current.streamConfig
-        if (cfg.serverUrl.isBlank()) {
-            audioEngine.nativeStopEngine()
-            _uiState.update {
-                it.copy(
-                    isConnecting = false,
-                    connectionError = "Configura primero tu servidor en la pestaña \"Servidor\" y pulsa Guardar."
-                )
-            }
-            return
-        }
-        val portInt = cfg.port.toIntOrNull() ?: 8000
-        audioEngine.nativeConnectStream(
-            cfg.serverUrl,
-            portInt,
-            cfg.mountPoint,
-            cfg.password,
-            cfg.bitrateKbps,
-            cfg.protocol.nativeValue,
-            cfg.stationName
-        )
-
-        connectionWatchJob?.cancel()
-        connectionWatchJob = viewModelScope.launch {
-            var elapsedMs = 0
-            val timeoutMs = 15000
-            while (elapsedMs < timeoutMs && isActive) {
-                delay(200)
-                elapsedMs += 200
-                when (audioEngine.nativeGetStreamStatus()) {
-                    NativeAudioEngine.STREAM_STREAMING -> {
-                        val apiName = try {
-                            audioEngine.nativeGetAudioApiName()
-                        } catch (e: Exception) {
-                            "AAudio (Oboe Native)"
-                        }
-                        _uiState.update {
-                            it.copy(
-                                isLive = true,
-                                isConnecting = false,
-                                connectionError = null,
-                                audioApiName = if (apiName.isBlank()) "AAudio (Oboe Native)" else apiName
-                            )
-                        }
-                        return@launch
-                    }
-                    NativeAudioEngine.STREAM_ERROR -> {
-                        audioEngine.nativeStopEngine()
-                        _uiState.update {
-                            it.copy(
-                                isLive = false,
-                                isConnecting = false,
-                                connectionError = "No se pudo conectar al servidor. Revisa host, puerto y contraseña."
-                            )
-                        }
-                        return@launch
-                    }
+        viewModelScope.launch {
+            if (_uiState.value.isLive) {
+                audioEngine.nativeDisconnectStream()
+                audioEngine.nativeStopEngine()
+                micEffects.release()
+                _uiState.update { it.copy(isLive = false, uptimeSeconds = 0L) }
+            } else {
+                _uiState.update { it.copy(isConnecting = true) }
+                val cfg = _uiState.value.streamConfig
+                val portInt = cfg.port.toIntOrNull() ?: 8000
+                audioEngine.nativeConnectStream(cfg.serverUrl, portInt, cfg.mountPoint, cfg.password, cfg.bitrateKbps)
+                delay(600) // Fast handshake
+                audioEngine.nativeStartEngine()
+                // Attach the platform echo canceler / noise suppressor to the
+                // mic's audio session now that the input stream is open, so
+                // the phone's own speaker (playing the decks) doesn't feed
+                // back into the mic as a whistle.
+                val sessionId = try { audioEngine.nativeGetInputSessionId() } catch (e: Exception) { -1 }
+                micEffects.attach(sessionId)
+                val apiName = try { audioEngine.nativeGetAudioApiName() } catch (e: Exception) { "AAudio (Oboe Native)" }
+                _uiState.update {
+                    it.copy(
+                        isLive = true,
+                        isConnecting = false,
+                        audioApiName = if (apiName.isBlank()) "AAudio (Oboe Native)" else apiName
+                    )
                 }
             }
-            // Timed out still connecting
-            audioEngine.nativeDisconnectStream()
-            audioEngine.nativeStopEngine()
-            _uiState.update {
-                it.copy(isLive = false, isConnecting = false, connectionError = "Tiempo de espera agotado conectando al servidor")
-            }
         }
+    }
+
+    // ---------- DJ Decks ----------
+
+    fun loadTrack(deck: Int, uri: Uri, displayName: String) {
+        val player = if (deck == 0) deckPlayerA else deckPlayerB
+        player.load(
+            uri = uri,
+            displayName = displayName,
+            onReady = {
+                updateDeckState(deck) { it.copy(title = displayName, isLoaded = true, durationMs = player.durationMs) }
+            },
+            onCompletion = {
+                updateDeckState(deck) { it.copy(isPlaying = false, positionMs = 0) }
+            }
+        )
+        updateDeckState(deck) { it.copy(title = displayName, isLoaded = false, isPlaying = false, positionMs = 0) }
+    }
+
+    fun toggleDeckPlayPause(deck: Int) {
+        val player = if (deck == 0) deckPlayerA else deckPlayerB
+        player.togglePlayPause()
+        updateDeckState(deck) { it.copy(isPlaying = player.isPlaying) }
+    }
+
+    fun setDeckVolume(deck: Int, volume: Float) {
+        val player = if (deck == 0) deckPlayerA else deckPlayerB
+        player.setVolume(volume)
+        updateDeckState(deck) { it.copy(volume = volume) }
+    }
+
+    fun seekDeck(deck: Int, ms: Int) {
+        val player = if (deck == 0) deckPlayerA else deckPlayerB
+        player.seekTo(ms)
+        updateDeckState(deck) { it.copy(positionMs = ms) }
+    }
+
+    /** Manual crossfader: -1 = solo A ... 0 = ambos ... +1 = solo B */
+    fun setCrossfader(position: Float) {
+        val clamped = position.coerceIn(-1f, 1f)
+        autoFading = false
+        _uiState.update { it.copy(crossfaderPosition = clamped) }
+        applyCrossfaderGains(clamped)
+    }
+
+    private fun applyCrossfaderGains(position: Float) {
+        // Equal-power crossfade curve so the perceived loudness stays
+        // constant while mixing, instead of a straight-line volume dip.
+        val t = (position + 1f) / 2f // 0..1
+        val gainA = sqrt((1f - t).toDouble()).toFloat()
+        val gainB = sqrt(t.toDouble()).toFloat()
+        val volA = _uiState.value.deckA.volume
+        val volB = _uiState.value.deckB.volume
+        deckPlayerA.setVolume(gainA * volA)
+        deckPlayerB.setVolume(gainB * volB)
+    }
+
+    private fun maybeAutoCrossfade() {
+        if (autoFading) return
+        val state = _uiState.value
+        val aEnding = deckPlayerA.isNearEnd(4000) && state.deckB.isLoaded && state.crossfaderPosition < 0.9f
+        val bEnding = deckPlayerB.isNearEnd(4000) && state.deckA.isLoaded && state.crossfaderPosition > -0.9f
+
+        if (aEnding) {
+            autoCrossfadeTo(target = 1f)
+        } else if (bEnding) {
+            autoCrossfadeTo(target = -1f)
+        }
+    }
+
+    private fun autoCrossfadeTo(target: Float) {
+        autoFading = true
+        viewModelScope.launch {
+            if (target > 0f && !deckPlayerB.isPlaying && deckPlayerB.isLoaded) deckPlayerB.play()
+            if (target < 0f && !deckPlayerA.isPlaying && deckPlayerA.isLoaded) deckPlayerA.play()
+
+            val steps = 40
+            val start = _uiState.value.crossfaderPosition
+            for (i in 1..steps) {
+                if (!autoFading) return@launch
+                val pos = start + (target - start) * (i / steps.toFloat())
+                _uiState.update { it.copy(crossfaderPosition = pos) }
+                applyCrossfaderGains(pos)
+                delay(100) // ~4s total fade
+            }
+            autoFading = false
+        }
+    }
+
+    private fun updateDeckState(deck: Int, transform: (DeckUiState) -> DeckUiState) {
+        _uiState.update {
+            if (deck == 0) it.copy(deckA = transform(it.deckA)) else it.copy(deckB = transform(it.deckB))
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        deckPlayerA.release()
+        deckPlayerB.release()
+        micEffects.release()
     }
 
     fun setMasterVolume(volume: Float) {
@@ -295,19 +326,16 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun toggleDucking() {
-        val enabled = !_uiState.value.isDuckingEnabled
-        _uiState.update { it.copy(isDuckingEnabled = enabled) }
-        audioEngine.nativeSetDuckingEnabled(enabled)
+        _uiState.update { it.copy(isDuckingEnabled = !it.isDuckingEnabled) }
     }
 
     fun setEqGains(low: Float, mid: Float, high: Float) {
         _uiState.update { it.copy(eqLowDb = low, eqMidDb = mid, eqHighDb = high) }
-        audioEngine.nativeSetEqGains(low, mid, high)
     }
 
     fun setVoiceEffects(reverb: Float, pitch: Float, gate: Float) {
         _uiState.update { it.copy(voiceReverb = reverb, voicePitch = pitch, noiseGateThresholdDb = gate) }
-        audioEngine.nativeSetVoiceEffects(reverb, pitch, gate)
+        audioEngine.nativeSetNoiseGateThreshold(gate)
     }
 
     fun triggerSoundPad(padId: Int) {
@@ -319,7 +347,7 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
             state.copy(soundPads = updatedPads)
         }
         viewModelScope.launch {
-            delay(900)
+            delay(1200)
             _uiState.update { state ->
                 val updatedPads = state.soundPads.map { pad ->
                     if (pad.id == padId) pad.copy(isPlaying = false) else pad
@@ -329,15 +357,8 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    /** Updates the in-memory config only (used for live UI previews, e.g. picking a bitrate). */
     fun updateStreamConfig(config: StreamConfig) {
         _uiState.update { it.copy(streamConfig = config) }
-    }
-
-    /** Updates the config AND persists it to disk so it survives an app restart. */
-    fun saveStreamConfig(config: StreamConfig) {
-        _uiState.update { it.copy(streamConfig = config) }
-        StreamConfigStore.save(getApplication(), config)
     }
 
     fun toggleLocalRecording() {
@@ -349,232 +370,12 @@ class RadioStudioViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update { it.copy(activeTab = tabIndex) }
     }
 
-    fun setSearchQuery(query: String) {
-        _uiState.update { it.copy(searchQuery = query) }
-    }
-
-    // --- Local music folder (Storage Access Framework) ---
-
-    fun setMusicFolder(treeUri: Uri) {
-        val context = getApplication<Application>()
-        try {
-            context.contentResolver.takePersistableUriPermission(
-                treeUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Could not persist folder permission: ${e.message}")
-        }
-
-        _uiState.update {
-            it.copy(
-                isScanningFolder = true,
-                musicFolderUri = treeUri.toString(),
-                musicFolderName = treeUri.lastPathSegment ?: "Carpeta local"
-            )
-        }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            val tracks = scanFolderForAudio(treeUri)
-            _uiState.update { it.copy(playlist = tracks, isScanningFolder = false) }
-        }
-    }
-
-    private fun scanFolderForAudio(treeUri: Uri): List<PlaylistItem> {
-        val context = getApplication<Application>()
-        val tracks = mutableListOf<PlaylistItem>()
-        val audioExtensions = setOf("mp3", "wav", "m4a", "aac", "ogg", "flac", "wma", "opus")
-
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            treeUri, DocumentsContract.getTreeDocumentId(treeUri)
-        )
-
-        try {
-            context.contentResolver.query(
-                childrenUri,
-                arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE
-                ),
-                null, null, null
-            )?.use { cursor ->
-                val idIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
-                val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
-                val mimeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
-
-                while (cursor.moveToNext()) {
-                    val name = cursor.getString(nameIdx) ?: continue
-                    val mime = cursor.getString(mimeIdx) ?: ""
-                    val ext = name.substringAfterLast('.', "").lowercase()
-                    if (!mime.startsWith("audio/") && ext !in audioExtensions) continue
-
-                    val docId = cursor.getString(idIdx)
-                    val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                    val durationStr = readDurationSafely(docUri)
-
-                    tracks.add(
-                        PlaylistItem(
-                            id = docUri.toString(),
-                            title = name.substringBeforeLast('.'),
-                            artist = "Música local",
-                            duration = durationStr
-                        )
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error scanning music folder: ${e.message}")
-        }
-
-        return tracks.sortedBy { it.title.lowercase() }
-    }
-
-    private fun readDurationSafely(uri: Uri): String {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(getApplication(), uri)
-            val ms = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            formatDuration(ms / 1000)
-        } catch (e: Exception) {
-            "--:--"
-        } finally {
-            try {
-                retriever.release()
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    // --- Music deck playback: decode the local file and feed PCM into the native mixer ---
-
     fun playPlaylistItem(itemId: String) {
-        val track = _uiState.value.playlist.find { it.id == itemId } ?: return
-
         _uiState.update { state ->
-            state.copy(playlist = state.playlist.map { it.copy(isPlaying = it.id == itemId) })
-        }
-
-        musicDecodeJob?.cancel()
-        audioEngine.nativeClearMusicBuffer()
-        audioEngine.nativeSetMusicPlaying(true)
-
-        musicDecodeJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                decodeAndFeedTrack(Uri.parse(track.id))
-            } catch (e: Exception) {
-                Log.e(TAG, "Error decoding track ${track.title}: ${e.message}")
+            val updated = state.playlist.map { item ->
+                item.copy(isPlaying = item.id == itemId)
             }
-            if (isActive) {
-                audioEngine.nativeSetMusicPlaying(false)
-                _uiState.update { state ->
-                    state.copy(playlist = state.playlist.map {
-                        if (it.id == itemId) it.copy(isPlaying = false) else it
-                    })
-                }
-            }
-        }
-    }
-
-    fun stopPlayback() {
-        musicDecodeJob?.cancel()
-        audioEngine.nativeSetMusicPlaying(false)
-        audioEngine.nativeClearMusicBuffer()
-        _uiState.update { state ->
-            state.copy(playlist = state.playlist.map { it.copy(isPlaying = false) })
-        }
-    }
-
-    private suspend fun decodeAndFeedTrack(uri: Uri) {
-        val context = getApplication<Application>()
-        val extractor = MediaExtractor()
-        try {
-            extractor.setDataSource(context, uri, null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Cannot open track: ${e.message}")
-            extractor.release()
-            return
-        }
-
-        var trackIndex = -1
-        var format: MediaFormat? = null
-        for (i in 0 until extractor.trackCount) {
-            val f = extractor.getTrackFormat(i)
-            val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
-            if (mime.startsWith("audio/")) {
-                trackIndex = i
-                format = f
-                break
-            }
-        }
-        if (trackIndex < 0 || format == null) {
-            extractor.release()
-            return
-        }
-        extractor.selectTrack(trackIndex)
-
-        val mime = format.getString(MediaFormat.KEY_MIME)!!
-        val sampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
-        val channelCount = if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 2
-
-        val codec = MediaCodec.createDecoderByType(mime)
-        codec.configure(format, null, null, 0)
-        codec.start()
-
-        val bufferInfo = MediaCodec.BufferInfo()
-        var inputDone = false
-        var outputDone = false
-
-        try {
-            while (!outputDone && kotlinx.coroutines.currentCoroutineContext().isActive) {
-                if (!inputDone) {
-                    val inIndex = codec.dequeueInputBuffer(10_000)
-                    if (inIndex >= 0) {
-                        val inBuf = codec.getInputBuffer(inIndex)
-                        val sampleSize = inBuf?.let { extractor.readSampleData(it, 0) } ?: -1
-                        if (sampleSize < 0) {
-                            codec.queueInputBuffer(inIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                            inputDone = true
-                        } else {
-                            codec.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
-                            extractor.advance()
-                        }
-                    }
-                }
-
-                val outIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000)
-                if (outIndex >= 0) {
-                    val outBuf = codec.getOutputBuffer(outIndex)
-                    if (outBuf != null && bufferInfo.size > 0) {
-                        val chunk = ByteArray(bufferInfo.size)
-                        outBuf.position(bufferInfo.offset)
-                        outBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        outBuf.get(chunk)
-
-                        val shorts = ShortArray(chunk.size / 2)
-                        ByteBuffer.wrap(chunk).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts)
-
-                        if (shorts.isNotEmpty() && channelCount > 0) {
-                            audioEngine.nativeFeedMusicPcm(shorts, shorts.size / channelCount, channelCount, sampleRate)
-                            // Throttle the decode loop to roughly real-time so the native
-                            // ring buffer doesn't fill up far ahead of what's being played.
-                            val frameCount = shorts.size / channelCount
-                            kotlinx.coroutines.delay((frameCount * 1000L / sampleRate).coerceAtLeast(1))
-                        }
-                    }
-                    codec.releaseOutputBuffer(outIndex, false)
-                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        outputDone = true
-                    }
-                }
-            }
-        } finally {
-            try {
-                codec.stop()
-            } catch (_: Exception) {
-            }
-            codec.release()
-            extractor.release()
+            state.copy(playlist = updated)
         }
     }
 }

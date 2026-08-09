@@ -12,9 +12,6 @@ plugins {
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
-  // Pinned so the native (C++/Oboe) build is reproducible on any machine or CI runner,
-  // regardless of which NDK versions happen to already be installed locally.
-  ndkVersion = "27.0.12077973"
 
   defaultConfig {
     applicationId = "com.aistudio.radiostreamer.qxnk"
@@ -41,39 +38,18 @@ android {
   }
 
   signingConfigs {
-    // Debug builds are always signed with a local debug.keystore. If it isn't present
-    // (e.g. a fresh clone on a new machine), the "ensureDebugKeystore" task below
-    // generates one automatically so `assembleDebug` works out of the box.
+    create("release") {
+      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
+      storeFile = file(keystorePath)
+      storePassword = System.getenv("STORE_PASSWORD")
+      keyAlias = "upload"
+      keyPassword = System.getenv("KEY_PASSWORD")
+    }
     create("debugConfig") {
       storeFile = file("${rootDir}/debug.keystore")
       storePassword = "android"
       keyAlias = "androiddebugkey"
       keyPassword = "android"
-    }
-    // Release builds use a real upload keystore supplied via environment variables
-    // (KEYSTORE_PATH, STORE_PASSWORD, KEY_PASSWORD) — see README.md "Publicar en modo release".
-    // If those aren't set, this falls back to the debug keystore so `assembleRelease` /
-    // `bundleRelease` still succeed locally for testing (the APK just won't be
-    // Play-Store-ready — replace with your own keystore before publishing).
-    create("release") {
-      val keystorePathEnv = System.getenv("KEYSTORE_PATH")
-      val storePasswordEnv = System.getenv("STORE_PASSWORD")
-      val keyPasswordEnv = System.getenv("KEY_PASSWORD")
-      if (keystorePathEnv != null && storePasswordEnv != null && keyPasswordEnv != null) {
-        storeFile = file(keystorePathEnv)
-        storePassword = storePasswordEnv
-        keyAlias = "upload"
-        keyPassword = keyPasswordEnv
-      } else {
-        logger.warn(
-          "No se encontraron KEYSTORE_PATH/STORE_PASSWORD/KEY_PASSWORD: " +
-            "el build 'release' se firmará con el keystore de debug (solo para pruebas locales)."
-        )
-        storeFile = file("${rootDir}/debug.keystore")
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
-      }
     }
   }
 
@@ -106,30 +82,6 @@ secrets {
 }
 
 googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
-
-// Generates a local debug.keystore on first build if one isn't already present, so the
-// project compiles and runs out of the box on any machine without manual keystore setup.
-// Uses Gradle's built-in Exec task type (not the `exec {}` script function, which newer
-// Gradle versions no longer resolve inside a plain registered task).
-val ensureDebugKeystore by tasks.registering(Exec::class) {
-  val keystoreFile = file("${rootDir}/debug.keystore")
-  outputs.file(keystoreFile)
-  onlyIf { !keystoreFile.exists() }
-  doFirst { logger.lifecycle("No se encontró debug.keystore, generando uno nuevo en ${keystoreFile.path}") }
-  commandLine(
-    "keytool", "-genkeypair", "-v",
-    "-keystore", keystoreFile.absolutePath,
-    "-storepass", "android",
-    "-alias", "androiddebugkey",
-    "-keypass", "android",
-    "-keyalg", "RSA",
-    "-keysize", "2048",
-    "-validity", "10000",
-    "-dname", "CN=Android Debug,O=Android,C=US"
-  )
-}
-
-tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(ensureDebugKeystore) }
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
