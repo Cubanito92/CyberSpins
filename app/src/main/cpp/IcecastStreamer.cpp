@@ -159,18 +159,42 @@ bool IcecastStreamer::performHandshake() {
     std::memset(response, 0, sizeof(response));
     ssize_t rec = recv(mSocketFd, response, sizeof(response) - 1, 0);
 
-    if (rec > 0) {
+if (rec > 0) {
         std::string respStr(response);
-        LOGI("Icecast Handshake Server Response: %s", respStr.substr(0, 60).c_str());
-        if (respStr.find("200 OK") != std::string::npos || respStr.find("HTTP/1.0 200") != std::string::npos || respStr.find("HTTP/1.1 200") != std::string::npos) {
-            LOGI("Connected to Icecast Server successfully!");
+        LOGI("Handshake Server Response: %s", respStr.substr(0, 80).c_str());
+
+        if (respStr.find("200 OK") != std::string::npos ||
+            respStr.find("HTTP/1.0 200") != std::string::npos ||
+            respStr.find("HTTP/1.1 200") != std::string::npos ||
+            respStr.find("ICY 200") != std::string::npos ||
+            respStr.find("OK\r\n") == 0 ||
+            respStr.find("OK2") == 0) {
+            LOGI("Connected to streaming server successfully!");
+            close(mSocketFd);
+            mSocketFd = -1;
             return true;
         }
+
+        if (respStr.find("401") != std::string::npos ||
+            respStr.find("403") != std::string::npos ||
+            respStr.find("Invalid") != std::string::npos ||
+            respStr.find("invalid password") != std::string::npos) {
+            mLastError = "Contraseña incorrecta o acceso denegado por el servidor";
+        } else {
+            mLastError = "El servidor respondió con un error: " + respStr.substr(0, 60);
+        }
+        LOGE("%s", mLastError.c_str());
+        close(mSocketFd);
+        mSocketFd = -1;
+        return false;
     }
 
-    // If server accepts stream or simulates socket broadcast stream fallback
-    LOGI("Handshake complete (proceeding with socket stream)");
-    return true;
+    mLastError = "El servidor no respondió (timeout). Verifica host, puerto y mount.";
+    LOGE("%s", mLastError.c_str());
+    close(mSocketFd);
+    mSocketFd = -1;
+    return false;
+}
 }
 
 std::vector<uint8_t> IcecastStreamer::generateMp3Frame(const int16_t* pcmBuf, size_t numSamples, int sampleRate, int channels) {
