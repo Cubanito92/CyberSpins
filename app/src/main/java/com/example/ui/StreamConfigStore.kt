@@ -23,9 +23,6 @@ object StreamConfigStore {
     fun load(context: Context): StreamConfig {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val defaults = StreamConfig()
-        val protocolName = prefs.getString(KEY_PROTOCOL, defaults.protocol.name)
-        val protocol = runCatching { StreamProtocolType.valueOf(protocolName ?: defaults.protocol.name) }
-            .getOrDefault(defaults.protocol)
 
         return StreamConfig(
             serverUrl = prefs.getString(KEY_SERVER_URL, defaults.serverUrl) ?: defaults.serverUrl,
@@ -35,7 +32,7 @@ object StreamConfigStore {
             stationName = prefs.getString(KEY_STATION_NAME, defaults.stationName) ?: defaults.stationName,
             genre = prefs.getString(KEY_GENRE, defaults.genre) ?: defaults.genre,
             bitrateKbps = prefs.getInt(KEY_BITRATE, defaults.bitrateKbps),
-            protocol = protocol
+            protocol = prefs.getString(KEY_PROTOCOL, defaults.protocol) ?: defaults.protocol
         )
     }
 
@@ -49,7 +46,7 @@ object StreamConfigStore {
             .putString(KEY_STATION_NAME, config.stationName)
             .putString(KEY_GENRE, config.genre)
             .putInt(KEY_BITRATE, config.bitrateKbps)
-            .putString(KEY_PROTOCOL, config.protocol.name)
+            .putString(KEY_PROTOCOL, config.protocol)
             .apply()
     }
 }
