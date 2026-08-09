@@ -118,7 +118,6 @@ fun StudioConsoleScreen(
                 )
                 1 -> EqualizerAndFxTab(state = state, viewModel = viewModel)
                 2 -> ServerStreamingTab(state = state, viewModel = viewModel)
-                3 -> PlaylistTab(state = state, viewModel = viewModel)
             }
         }
     }
